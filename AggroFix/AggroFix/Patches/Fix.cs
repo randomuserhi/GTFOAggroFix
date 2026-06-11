@@ -9,17 +9,22 @@ using Player;
 namespace AggroFix {
     [HarmonyPatch]
     internal static class Fix {
-        private static bool IsTargetReachable(AIG_CourseNode source, AIG_CourseNode target) {
+        private static bool IsTargetReachable(AIG_CourseNode source, AIG_CourseNode target, out int nodeDistance) {
+            nodeDistance = -1;
             if (source == null || target == null) return false;
-            if (source.NodeID == target.NodeID) return true;
+            if (source.m_dimension.DimensionIndex != target.m_dimension.DimensionIndex) return false;
+            if (source.NodeID == target.NodeID) {
+                nodeDistance = 0;
+                return true;
+            }
 
             AIG_SearchID.IncrementSearchID();
             ushort searchID = AIG_SearchID.SearchID;
-            Queue<AIG_CourseNode> queue = new Queue<AIG_CourseNode>();
-            queue.Enqueue(source);
+            Queue<(AIG_CourseNode, int)> queue = new Queue<(AIG_CourseNode, int)>();
+            queue.Enqueue((source, 1));
 
             while (queue.Count > 0) {
-                AIG_CourseNode current = queue.Dequeue();
+                var (current, dist) = queue.Dequeue();
                 current.m_searchID = searchID;
                 foreach (AIG_CoursePortal portal in current.m_portals) {
                     LG_SecurityDoor? secDoor = portal.Gate?.SpawnedDoor?.TryCast<LG_SecurityDoor>();
@@ -29,8 +34,11 @@ namespace AggroFix {
                     }
                     AIG_CourseNode nextNode = portal.GetOppositeNode(current);
                     if (nextNode.m_searchID == searchID) continue;
-                    if (nextNode.NodeID == target.NodeID) return true;
-                    queue.Enqueue(nextNode);
+                    if (nextNode.NodeID == target.NodeID) {
+                        nodeDistance = dist;
+                        return true;
+                    }
+                    queue.Enqueue((nextNode, dist + 1));
                 }
             }
 
@@ -51,7 +59,8 @@ namespace AggroFix {
             case ES_StateEnum.Hibernate:
                 return;
             }
-            if (!IsTargetReachable(enemy.CourseNode, __instance.m_targetRef.m_agent.CourseNode)) {
+
+            if (!IsTargetReachable(enemy.CourseNode, __instance.m_targetRef.m_agent.CourseNode, out _)) {
                 if (ConfigManager.Debug) APILogger.Debug($"Invalid current {__instance.m_targetRef.m_agent.Cast<PlayerAgent>().Owner.NickName}");
 
                 bool foundValidTarget = false;
@@ -61,7 +70,7 @@ namespace AggroFix {
 
                 for (int i = 0; i < PlayerManager.PlayerAgentsInLevel.Count; ++i) {
                     APILogger.Debug($"Checking {selected.Owner.NickName}");
-                    if (selected.Alive && selected.GetInstanceID() != __instance.m_targetRef.m_agent.GetInstanceID() && IsTargetReachable(enemy.CourseNode, selected.CourseNode)) {
+                    if (selected.Alive && selected.GetInstanceID() != __instance.m_targetRef.m_agent.GetInstanceID() && IsTargetReachable(enemy.CourseNode, selected.CourseNode, out _)) {
                         foundValidTarget = true;
                         break;
                     } else {
