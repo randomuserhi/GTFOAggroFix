@@ -1,50 +1,13 @@
 ﻿using AggroFix.BepInEx;
-using AIGraph;
+using AmorLib.Utils;
 using API;
 using Enemies;
 using HarmonyLib;
-using LevelGeneration;
 using Player;
 
 namespace AggroFix {
     [HarmonyPatch]
     internal static class Fix {
-        private static bool IsTargetReachable(AIG_CourseNode source, AIG_CourseNode target, out int nodeDistance) {
-            nodeDistance = -1;
-            if (source == null || target == null) return false;
-            if (source.m_dimension.DimensionIndex != target.m_dimension.DimensionIndex) return false;
-            if (source.NodeID == target.NodeID) {
-                nodeDistance = 0;
-                return true;
-            }
-
-            AIG_SearchID.IncrementSearchID();
-            ushort searchID = AIG_SearchID.SearchID;
-            Queue<(AIG_CourseNode, int)> queue = new Queue<(AIG_CourseNode, int)>();
-            queue.Enqueue((source, 1));
-
-            while (queue.Count > 0) {
-                var (current, dist) = queue.Dequeue();
-                current.m_searchID = searchID;
-                foreach (AIG_CoursePortal portal in current.m_portals) {
-                    LG_SecurityDoor? secDoor = portal.Gate?.SpawnedDoor?.TryCast<LG_SecurityDoor>();
-                    if (secDoor != null) {
-                        if (secDoor.LastStatus != eDoorStatus.Open && secDoor.LastStatus != eDoorStatus.Opening)
-                            continue;
-                    }
-                    AIG_CourseNode nextNode = portal.GetOppositeNode(current);
-                    if (nextNode.m_searchID == searchID) continue;
-                    if (nextNode.NodeID == target.NodeID) {
-                        nodeDistance = dist;
-                        return true;
-                    }
-                    queue.Enqueue((nextNode, dist + 1));
-                }
-            }
-
-            return false;
-        }
-
         // Aggro fix
         private static bool patch = true;
         [HarmonyPatch(typeof(EnemyCourseNavigation), nameof(EnemyCourseNavigation.UpdateTracking))]
@@ -60,22 +23,23 @@ namespace AggroFix {
                 return;
             }
 
-            if (!IsTargetReachable(enemy.CourseNode, __instance.m_targetRef.m_agent.CourseNode, out _)) {
+            if (!ZoneGraphUtil.IsReachable(__instance.m_targetPlayerID, enemy.CourseNode, GraphLayer.Zone, ReachableMode.Changing)) {
                 if (ConfigManager.Debug) APILogger.Debug($"Invalid current {__instance.m_targetRef.m_agent.Cast<PlayerAgent>().Owner.NickName}");
 
                 bool foundValidTarget = false;
+                var agents = PlayerManager.PlayerAgentsInLevel;
+                var agentCount = agents.Count;
+                int index = UnityEngine.Random.RandomRangeInt(0, agentCount);
+                PlayerAgent selected = agents[index];
 
-                int index = UnityEngine.Random.RandomRangeInt(0, PlayerManager.PlayerAgentsInLevel.Count);
-                PlayerAgent selected = PlayerManager.PlayerAgentsInLevel[index];
-
-                for (int i = 0; i < PlayerManager.PlayerAgentsInLevel.Count; ++i) {
+                for (int i = 0; i < agentCount; ++i) {
                     APILogger.Debug($"Checking {selected.Owner.NickName}");
-                    if (selected.Alive && selected.GetInstanceID() != __instance.m_targetRef.m_agent.GetInstanceID() && IsTargetReachable(enemy.CourseNode, selected.CourseNode, out _)) {
+                    if (selected.Alive && selected.PlayerSlotIndex != __instance.m_targetPlayerID && ZoneGraphUtil.IsReachable(selected.PlayerSlotIndex, enemy.CourseNode, GraphLayer.Zone, ReachableMode.Changing)) {
                         foundValidTarget = true;
                         break;
                     } else {
-                        index = (index + 1) % PlayerManager.PlayerAgentsInLevel.Count;
-                        selected = PlayerManager.PlayerAgentsInLevel[index];
+                        index = (index + 1) % agentCount;
+                        selected = agents[index];
                     }
                 }
 
